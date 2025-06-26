@@ -1,7 +1,13 @@
 import paho.mqtt.client as mqtt
- 
-MQTT_SERVER = input("BROKER: ")
-MQTT_PATH = input("TOPIC: ")
+
+
+MQTT_SERVER = "broker.hivemq.com"
+MQTT_PATH = "demo/opcua-sub-to-mqtt/server_test/variables/#"
+
+
+# 사용자로부터 브로커 주소와 구독할 토픽을 입력 
+# MQTT_SERVER = input("BROKER: ")
+# MQTT_PATH = input("TOPIC: ")
  
 # The callback for when the client receives a CONNACK response from the server.
 def on_connect(client, userdata, flags, rc):
@@ -15,6 +21,7 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     print(msg.topic+" "+str(msg.payload))
     # more callbacks, etc
+ 
  
 client = mqtt.Client()
 client.on_connect = on_connect
