@@ -10,7 +10,9 @@ from asyncua import Client, ua, Node
 from asyncua.common.events import Event
 from asyncua.common.subscription import DataChangeNotif
 from datetime import timezone
-from shared_queue import send_queue
+from datetime import datetime
+
+from shared_queue import send_queue, MQTTStatusMessage
 
 ####################################################################################
 # Globals:
@@ -44,36 +46,22 @@ server_configs = [
     },
 ]
 
-"""server_urls = [
-    "opc.tcp://127.0.0.1:4840",
-    "opc.tcp://192.168.0.10:4840",
-    "opc.tcp://192.168.0.11:4840"
-]
-#OPC UA에서 받은 데이터를 MQTT로 보내기 위한 큐 (비동기 전송용)
-send_queue = asyncio.Queue()
-
-# OPC UA 서버에서 구독(Subscribe)할 데이터 변수 노드 ID들 (예: Count, ServiceLevel 등)
-nodes_to_subscribe =    [
-                        #node-id
-                        "ns=2;i=2", 
-                        "i=2267", 
-                        "i=2259",                       
-                        ]
-
-#OPC UA의 이벤트 구독용 설정 (예: 알람, 상태변화 등) "ns=2;i=1"은 이벤트를 발생시키는 장비 노드, "ns=2;i=3"은 이벤트 타입
-events_to_subscribe =   [
-                        #(EventSource-NodeId, EventType-NodeId)
-                        ("ns=2;i=1", "ns=2;i=3"),
-                        ("ns=2;i=1", "ns=2;i=6")
-                        ]
-"""
-
 
 # MQTT-Settings:
 #MQTT 브로커 주소. 여기선 공개 테스트용 브로커인 hivemq 사용
 broker_ip = "broker.hivemq.com"
 #MQTT 브로커 포트 (기본은 1883, 보안 미적용 시)
 broker_port = 1883
+
+class MQTTStatusMessage:
+    def __init__(self, status, broker, port, topics, detail=""):
+        self.type = "mqtt_status"
+        self.status = status  # 예: "CONNECTED", "DISCONNECTED", "ERROR"
+        self.broker = broker
+        self.port = port
+        self.topics = topics
+        self.detail = detail
+        self.time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 ####################################################################################
 # Factories:
@@ -320,17 +308,29 @@ class MqttMessage:
 
 # MQTT 브로커에 연결하고, 큐에 쌓인 메시지를 발행
 async def publisher():
-    # AsyncExitStack함수로 클린업 관리
     async with AsyncExitStack() as stack:
         tasks = set()
         stack.push_async_callback(cancel_tasks, tasks)
         mqtt_client = MqttClient(hostname=broker_ip, port=broker_port)
-        await stack.enter_async_context(mqtt_client)
+        try:
+            await stack.enter_async_context(mqtt_client)
+            # 상태: CONNECTED
+            await send_queue.put(MQTTStatusMessage(
+                status="CONNECTED", broker=broker_ip, port=broker_port,
+                topics="demo/opcua-sub-to-mqtt/#", detail="연결됨"
+            ))
 
-        task = asyncio.create_task(publish_messages(mqtt_client, send_queue))
-        tasks.add(task)
+            task = asyncio.create_task(publish_messages(mqtt_client, send_queue))
+            tasks.add(task)
 
-        await asyncio.gather(*tasks)
+            await asyncio.gather(*tasks)
+        except Exception as e:
+            # 상태: ERROR
+            await send_queue.put(MQTTStatusMessage(
+                status="ERROR", broker=broker_ip, port=broker_port,
+                topics="demo/opcua-sub-to-mqtt/#", detail=str(e)
+            ))
+            raise
 
 # send_queue에서 메시지를 하나씩 꺼내서 MQTT 브로커로 보냄
 async def publish_messages(client: MqttClient, queue: asyncio.Queue[MqttMessage]):
@@ -343,7 +343,7 @@ async def publish_messages(client: MqttClient, queue: asyncio.Queue[MqttMessage]
         )
         if get in done:
             message: MqttMessage = get.result()
-            await client.publish(message.topic, message.payload, message.qos, message.retain)
+            await client.publish(message.topic, message.payload, message.qos, retain=True)
         
 async def cancel_tasks(tasks):
     for task in tasks:
